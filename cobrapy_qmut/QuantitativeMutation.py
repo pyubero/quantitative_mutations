@@ -47,16 +47,16 @@ class QuantitativeMutation:
         
         ####### Reactions #######
         # Store separately exchange, system and non-exchange reactions,as these are lists, the order is kept *constant*        
-        self.EX_RXNS  =  [ rxn.id for rxn in self.model.reactions if rxn.id[:3]=='EX_' ]
-        self.SYS_RXNS =  [ rxn.id for rxn in self.model.reactions if rxn.id[:4]=='BIOM' or rxn.id=='ATPM']
-        self.NEX_RXNS =  [ rxn.id for rxn in self.model.reactions 
-                                       if not rxn.id[:3]=='EX_' and not rxn.id[:4]=='BIOM' and not rxn.id=='ATPM']
+        self.EX_RXNS  =  np.array( [ rxn.id for rxn in self.model.reactions if rxn.id[:3]=='EX_' ] )
+        self.SYS_RXNS =  np.array( [ rxn.id for rxn in self.model.reactions if rxn.id[:4]=='BIOM' or rxn.id=='ATPM'] )
+        self.NEX_RXNS =  np.array( [ rxn.id for rxn in self.model.reactions 
+                                       if not rxn.id[:3]=='EX_' and not rxn.id[:4]=='BIOM' and not rxn.id=='ATPM'] )
         
         # Also store there indices for quick array access
-        self.EX_RXNS_IDX  =  [ idx for idx, rxn in enumerate(self.model.reactions) if rxn.id[:3]=='EX_' ]
-        self.SYS_RXNS_IDX =  [ idx for idx, rxn in enumerate(self.model.reactions) if rxn.id[:4]=='BIOM' or rxn.id=='ATPM']
-        self.NEX_RXNS_IDX =  [ idx for idx, rxn in enumerate(self.model.reactions) 
-                                       if not rxn.id[:3]=='EX_' and not rxn.id[:4]=='BIOM' and not rxn.id=='ATPM']
+        self.EX_RXNS_IDX  =  np.array( [ idx for idx, rxn in enumerate(self.model.reactions) if rxn.id[:3]=='EX_' ] )
+        self.SYS_RXNS_IDX =  np.array( [ idx for idx, rxn in enumerate(self.model.reactions) if rxn.id[:4]=='BIOM' or rxn.id=='ATPM'])
+        self.NEX_RXNS_IDX =  np.array( [ idx for idx, rxn in enumerate(self.model.reactions) 
+                                       if not rxn.id[:3]=='EX_' and not rxn.id[:4]=='BIOM' and not rxn.id=='ATPM'] )
         
         # Store their numbers, this is useful for array shaping
         self.N_FLUXES = len(self.model.reactions)
@@ -554,97 +554,7 @@ class QuantitativeMutation:
 
     
     
-    def compute_population(self, genotypes, media, nprocessors=50, chunksize=1):
-        samples     = genotypes.shape[0]
-        _infeasible = 0
-        
-        # Preallocate memory for output data
-        mu       = np.nan*np.zeros((samples,))
-        J        = np.nan*np.zeros((samples, self.N_NEX_RXNS))
-        Ri       = np.nan*np.zeros((samples,))
-        
-
-        # Prepare parallel function
-        global parallel_function
-        def parallel_function(idx):
-            return idx, self.compute_individual( genotype = genotypes[idx,:] ,  medium=media[idx] )
-        
-        
-        with self.model:
-            # This helps reduce the search space and give consistent results
-            self.reset_dosage()
-            self.apply_dosage()
-            
-            # Open pool of workers and start parallelizing the parallel_function
-            if self.VERBOSE: print('Computing population of %d samples...' % samples)
-            with Pool( processes = nprocessors) as pool:
-                it = pool.imap_unordered( parallel_function , range(samples), chunksize=chunksize )
-
-                for results in tqdm(it, total=samples, leave=self.VERBOSE): 
-                    idx = results[0]
-
-                    # If result is infeasible, skip:
-                    if results[1] is None:
-                        _infeasible += 1
-                        continue
-
-                    #... or else store output data
-                    mu[idx] = results[1][0]
-                    J[idx,:]= results[1][2]
-                    Ri[idx] = results[1][4]
-        if self.VERBOSE: print('Total infeasible from within %d' % _infeasible)
-        
-        return mu, genotypes, J, media, Ri
-    
-    
-    def clear_population(self, mu , MATRICES=[], minimal_gr=1e-2):      
-        idx = np.isnan(mu) | (mu < minimal_gr)
-        _mu = np.delete(mu, idx, axis=0)
-        _M  = [ np.delete(jj, idx, axis=0) for jj in MATRICES ]
-        if self.VERBOSE: print('\n <W> Clearing %d individuals from the population' % np.sum(idx) )
-        return _mu, *_M
-
-
-    
-    ##################################################################################
-    ######################### ------------------------------ #########################
-    ##################################################################################
-    def set_dosage(self, gene_id, relative_dosage=1):
-        self.gene_dosage[gene_id] = np.clip( relative_dosage, 1e-8, 1e3)
-        return relative_dosage
-    
-    def reset_dosage(self):
-        [self.set_dosage(gene, 1) for gene in self.GENES] 
-
-    def apply_dosage(self):
-        [ self.__set_ubound( rxn_id, np.clip( self.GRR[rxn_id](self) , 0, 1)*self.upper_bounds[rxn_id]) 
-         for rxn_id in self.NEX_RXNS ]
-        
-        [ self.__set_lbound( rxn_id, np.clip( self.GRR[rxn_id](self) , 0, 1)*self.lower_bounds[rxn_id] ) 
-         for rxn_id in self.NEX_RXNS ]
-        
-        
-    def set_genotype(self, genotype):
-        if genotype is None:
-            genotype = np.ones((self.N_GENES,))
-            
-        _=[ self.set_dosage(gene, genotype[jj] ) for jj, gene in enumerate(self.GENES) ]
-        return genotype
-    
-        
-    def set_medium(self, medium=None):
-        if medium is not None:
-            self.model.medium = medium
-        return self.model.medium
-    
-    
-    
-    
-    
-    
-    
-    
-    def compute_population2(self, genotypes, media, nprocessors=50, chunksize=1, timeout=10):
+    def compute_population(self, genotypes, media, nprocessors=50, chunksize=1, timeout=20):
         from multiprocessing import TimeoutError
 
         samples     = genotypes.shape[0]
@@ -700,6 +610,104 @@ class QuantitativeMutation:
         J[:]   = np.nan
         Ri[:]  = np.nan
         return mu, genotypes, J, media, Ri
+    
+    
+    def clear_population(self, mu , MATRICES=[], minimal_gr=1e-2):      
+        idx = np.isnan(mu) | (mu < minimal_gr)
+        _mu = np.delete(mu, idx, axis=0)
+        _M  = [ np.delete(jj, idx, axis=0) for jj in MATRICES ]
+        if self.VERBOSE: print('\n <W> Clearing %d individuals from the population' % np.sum(idx) )
+        return _mu, *_M
+    
+    
+    '''
+    #### OLD VERSION WITHOUT TIMEOUT ###
+    def compute_population(self, genotypes, media, nprocessors=50, chunksize=1):
+        samples     = genotypes.shape[0]
+        _infeasible = 0
+        
+        # Preallocate memory for output data
+        mu       = np.nan*np.zeros((samples,))
+        J        = np.nan*np.zeros((samples, self.N_NEX_RXNS))
+        Ri       = np.nan*np.zeros((samples,))
+        
+
+        # Prepare parallel function
+        global parallel_function
+        def parallel_function(idx):
+            return idx, self.compute_individual( genotype = genotypes[idx,:] ,  medium=media[idx] )
+        
+        
+        with self.model:
+            # This helps reduce the search space and give consistent results
+            self.reset_dosage()
+            self.apply_dosage()
+            
+            # Open pool of workers and start parallelizing the parallel_function
+            if self.VERBOSE: print('Computing population of %d samples...' % samples)
+            with Pool( processes = nprocessors) as pool:
+                it = pool.imap_unordered( parallel_function , range(samples), chunksize=chunksize )
+
+                for results in tqdm(it, total=samples, leave=self.VERBOSE): 
+                    idx = results[0]
+
+                    # If result is infeasible, skip:
+                    if results[1] is None:
+                        _infeasible += 1
+                        continue
+
+                    #... or else store output data
+                    mu[idx] = results[1][0]
+                    J[idx,:]= results[1][2]
+                    Ri[idx] = results[1][4]
+        if self.VERBOSE: print('Total infeasible from within %d' % _infeasible)
+        
+        return mu, genotypes, J, media, Ri
+    '''
+    
+    
+    
+
+    
+    ##################################################################################
+    ######################### ------------------------------ #########################
+    ##################################################################################
+    def set_dosage(self, gene_id, relative_dosage=1):
+        self.gene_dosage[gene_id] = np.clip( relative_dosage, 1e-8, 1e3)
+        return relative_dosage
+    
+    def reset_dosage(self):
+        [self.set_dosage(gene, 1) for gene in self.GENES] 
+
+    def apply_dosage(self):
+        [ self.__set_ubound( rxn_id, np.clip( self.GRR[rxn_id](self) , 0, 1)*self.upper_bounds[rxn_id]) 
+         for rxn_id in self.NEX_RXNS ]
+        
+        [ self.__set_lbound( rxn_id, np.clip( self.GRR[rxn_id](self) , 0, 1)*self.lower_bounds[rxn_id] ) 
+         for rxn_id in self.NEX_RXNS ]
+        
+        
+    def set_genotype(self, genotype):
+        if genotype is None:
+            genotype = np.ones((self.N_GENES,))
+            
+        _=[ self.set_dosage(gene, genotype[jj] ) for jj, gene in enumerate(self.GENES) ]
+        return genotype
+    
+        
+    def set_medium(self, medium=None):
+        if medium is not None:
+            self.model.medium = medium
+        return self.model.medium
+    
+    
+    
+    
+    
+    
+    
+    
+    
 
                 
             
