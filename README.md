@@ -4,7 +4,7 @@ The package qmut contains mainly a class called QuantitativeMutation to enable t
 ## Installation
  1. Check that you have `cobrapy` installed in your environment
  2. Download and copy the `\cobrapy_qmut` folder in your working directory.
-
+ 3. You can import the package running `import cobrapy_qmut`, and create a `cobrapy_qmut.QuantitativeMutation()`
 
 ## Turotial
 In this tutorial we will show the main applications and methods of the QuantiativeMutation objects, briefly:
