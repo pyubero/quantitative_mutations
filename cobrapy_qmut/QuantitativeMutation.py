@@ -142,6 +142,7 @@ class QuantitativeMutation:
         print('Maxbounds exported as %s on %s.' % (filename, datetime.now() ) )
         return
         
+
     def load_bounds(self, filename):
         with open(filename,'r') as f:
             for _ in range(self.N_NEX_RXNS):
@@ -481,7 +482,8 @@ class QuantitativeMutation:
     ##################################################################################
     ########################### Individuals and populations ##########################
     ##################################################################################
-    def random_medium(self, noc = 10, minimal={}, lower_lim=0, upper_lim = 20, method='linear'):
+    
+    def __old_random_medium(self, noc = 10, minimal={}, lower_lim=0, upper_lim = 20, method='linear'):
         
         # If noc is None return current medium
         if noc is None:
@@ -504,6 +506,37 @@ class QuantitativeMutation:
         
         return new_medium
     
+
+    def random_medium(self, m , minimal={}, lower_lim=0, upper_lim = 20, method='linear'):
+        
+        # If noc is None return current medium
+        if m is None or m<=0:
+            return self.model.medium
+
+        # Create empty dict
+        new_medium = {}
+
+        # Sample exponential distribution with lambda=m
+        s_exp = np.random.exponential(scale=m, size=(self.N_EX_RXNS,))
+        s_uni = np.random.rand(self.N_EX_RXNS)
+        components = self.EX_RXNS[ np.nonzero(s_uni<s_exp)]
+
+
+
+        #... sample environment_randomization_fun
+        _ = [new_medium.update( { icomp:self._random_bound( lower_lim, upper_lim, method) } ) for icomp in components ]
+        
+        # Then add minimal components
+        _ = [ new_medium.update( { key : value } ) for key, value in minimal.items() ]
+        
+        return new_medium
+
+
+    
+
+
+    
+
     def random_genotype(self, sigma, method, lower_lim=1e-12, upper_lim = 1 ):
         if method =='exponential':
             genotype = 1- np.random.exponential( scale=sigma[0] , size=(self.N_GENES,))
