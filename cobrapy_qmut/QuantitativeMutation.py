@@ -162,151 +162,54 @@ class QuantitativeMutation:
         print('Maxbounds reset to 999 on %s.' % (datetime.now() ) )
         return 
     
+ 
+    def _compute_bounds_parallel(self, medium):
+        from cobra.flux_analysis import pfba
+        with self.model:
+            self.model.medium = medium
+            if self._maxbounds_pfba:
+                solution = pfba(self.model)
+            else:
+                solution = self.model.optimize()
+        return medium, solution
+
+
+    def compute_bounds(self, media_list, pfba=True, nprocessors=None, chunksize=1):      
         
+        # Compute as many samples as media in media_list
+        samples = len(media_list)
         
-        
-        
-    def compute_bounds(self, samples, pfba=True, nprocessors=1 , media_list=None, flux_min=0.1, flux_max=100, method='linear'):       
-        # The two extra slots in _maxbounds_flx are for the unbounded wt in current medium, and for a full vector of 0s
-        self._maxbounds_flx = np.zeros( ( samples + 2 , self.N_NEX_RXNS ) )
-        self._maxbounds_bio = np.zeros( ( samples + 1 , ) )
-        self._maxbounds_fmin= flux_min
-        self._maxbounds_fmax= flux_max
-        self._maxbounds_method= method
+        # The extra slot in _maxbounds_flx is for a full vector of 0s
+        self._maxbounds_pfba = pfba
+        self._maxbounds_flx  = np.zeros( ( samples + 1 , self.N_NEX_RXNS ) )
+        self._maxbounds_bio  = np.zeros( ( samples  , ) )
         
         #... delete gene_reaction_rules as it makes Q non-parallelizable 
         self.GRR = {}
 
-        #... check that the unbounded solution in the standard medium is feasible
-        _solution = self.model.optimize()
-        if _solution.status == 'infeasible':
-            print('<< E >> Please make sure Q.model is feasible in the standard medium.')
-            return
-
-        #... include the unbounded solution in the standard medium
-        self._maxbounds_flx[0,:] = np.array( [ _solution.fluxes[rxn_id] for rxn_id in self.NEX_RXNS] )
-        self._maxbounds_bio[0]   = _solution.fluxes[ self.BIOMASS_ID ]
+        
+        with Pool( processes = nprocessors ) as pool:
+                it = pool.imap_unordered( self._compute_bounds_parallel , media_list, chunksize=chunksize )
+                
+                for results in tqdm( it, total=samples, leave=self.VERBOSE ):
+                    med = results[0]
+                    sol = results[1]
+                    idx = np.argwhere( np.array(media_list)==med)[0][0]
+                    
+                    self._maxbounds_flx[ idx,:] = [ sol.fluxes[rxn] for rxn in self.NEX_RXNS ]
+                    self._maxbounds_bio[ idx]   = sol.fluxes[self.BIOMASS_ID]
         
         
-        # If a media list is not provided, use always the standard medium...
-        if media_list is None:
-            print('Computing flux bounds with default medium.')
-            media_it = [ None for _ in range( samples ) ]
-            
-        #... but if media list is too long or too short, choose n=samples media randomly
-        else:
-            if len(media_list) != samples:
-                print('<W> len(media_list) <> samples; selecting %d media randomly from the provided list' % samples)
-                media_it = [ media_list[np.random.randint(len(media_list))] for _ in range(samples) ]
-            else:
-                print('Computing flux bounds with the media in media_list.')
-                media_it = media_list
-            
-        
-        _infeasible = 0 
-
-        #====== Single process ======#
-        if nprocessors == 1:
-            for ii in tqdm(range(samples)):
-                
-                _solution = self._compute_bounds_parallel( media_it[ii] )
-                
-                if _solution[0] is not None:
-                    self._maxbounds_flx[ii+1,:] = _solution[0]
-                    self._maxbounds_bio[ii+1]   = _solution[1]
-                else:
-                    _infeasible+=1
-                    if _infeasible>100: print('There have been over 100 infeasible runs. Aborting.')
-                    if _infeasible>100: return
-
-            
-        #==== Multiple processes ====#
-        if nprocessors > 1:
-            
-            # Count the progress of parallel computations
-            _isample = 1
-            
-            with Pool( nprocessors ) as pool:
-                it = pool.imap( self._compute_bounds_parallel , media_it )
-                
-                for _solution in tqdm( it, total=(samples) ):
-                    if _solution[0] is not None:
-                        self._maxbounds_flx[_isample,:] = _solution[0]
-                        self._maxbounds_bio[_isample]   = _solution[1]
-                        _isample += 1
-                    else:
-                        _infeasible += 1
-                        if _infeasible > 100:
-                            print('There have been over 100 infeasible runs. Aborting.')
-                            return
-            
         #==== Define global bounds ====#
         sleep(0.1)
         _ = [ self.upper_bounds.update( {rxn : np.max(self._maxbounds_flx[:,jj]) } ) for jj, rxn in enumerate(self.NEX_RXNS) ]
         _ = [ self.lower_bounds.update( {rxn : np.min(self._maxbounds_flx[:,jj]) } ) for jj, rxn in enumerate(self.NEX_RXNS) ]
-        print('There have been %d infeasible cases out of %d samples' % (_infeasible, samples) )
+        #print('There have been %d infeasible cases out of %d samples' % (_infeasible, samples) )
         
         # And recompute gene reaction rule translations (aka lambda functions)
         self.translate_all_gene_reaction_rules()
-        
-           
-    def _compute_bounds_parallel(self, medium=None):
-        np.random.seed()
-        with self.model:
-            #Set random media    
-            if medium is not None:
-                self.model.medium = medium
-            
-            #Obtain wt unbounded solution
-            sol_unbounded = self.model.optimize()
-            bio_unbounded = sol_unbounded.fluxes[self.BIOMASS_ID]
-            flx_unbounded = sol_unbounded.fluxes
-            
-            
-            #Set random bounds
-            [ self.__set_ubound( 
-                rxn_id,
-                +self._random_bound(
-                    self._maxbounds_fmin,
-                    self._maxbounds_fmax,
-                    self._maxbounds_method ) 
-                ) for rxn_id in self.NEX_RXNS
-            ]
-            
-            [ self.__set_lbound( 
-                rxn_id,
-                -self._random_bound(
-                    self._maxbounds_fmin,
-                    self._maxbounds_fmax,
-                    self._maxbounds_method ) 
-                ) for rxn_id in self.NEX_RXNS
-            ]
-            
-            #[ self.__set_ubound( rxn_id, +self._random_bound() ) for rxn_id in self.NEX_RXNS]
-            #[ self.__set_lbound( rxn_id, -self._random_bound() ) for rxn_id in self.NEX_RXNS]
-            
-            
-            #Obtain bounded solution
-            sol_bounded = self.model.optimize()
-            bio_bounded = sol_bounded.fluxes[self.BIOMASS_ID]
-            flx_bounded = sol_bounded.fluxes
-            
-            
-            #Extract largest fluxes and largest biomass prod. rate
-            flx_results =[ self.__max_bound( flx_unbounded[rxn_id],flx_bounded[rxn_id]) for rxn_id in self.NEX_RXNS ] 
-            flx_results = np.array( flx_results )
-            bio_results = np.nanmax( (bio_bounded,bio_unbounded) )
-        
-            results  = [ None, None ]
 
-            
-            if sol_bounded.status == 'optimal' and sol_unbounded.status =='optimal':
-                results[0] = flx_results
-                results[1] = bio_results
-                return results
-            else:
-                return results
-            
+         
     def _random_bound(self, fmin, fmax, method):
                       
         # The maximum minimal bound is positive, non-null and smaller than fmax
