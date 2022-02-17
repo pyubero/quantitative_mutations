@@ -154,28 +154,70 @@ class QuantitativeMutation:
         print('Maxbounds loaded from %s on %s.' % (filename, datetime.now() ) )
         return extra_data
     
-    def reset_bounds(self, filename):
-        for rxn in self.NEX_RXNS:
-            self.upper_bounds[rxn] = 999
-            self.lower_bounds[rxn] = 999
-            
-        print('Maxbounds reset to 999 on %s.' % (datetime.now() ) )
+    def reset_bounds(self):
+        _ = [ self.__set_ubound(rxnid, +999) for rxnid in self.NEX_RXNS ]
+        _ = [ self.__set_lbound(rxnid, -999) for rxnid in self.NEX_RXNS ]
+   
+        print('Maxbounds reset to +/- 999 on %s.' % (datetime.now() ) )
         return 
     
  
     def _compute_bounds_parallel(self, medium):
+
         from cobra.flux_analysis import pfba
+        
         with self.model:
             self.model.medium = medium
+            
+            # First compute the unbounded solution
             if self._maxbounds_pfba:
-                solution = pfba(self.model)
+                unbounded_sol = pfba(self.model)
             else:
-                solution = self.model.optimize()
-        return medium, solution
+                unbounded_sol = self.model.optimize()
 
+            # Second, compute the bounded solution
+            _nkd = int( self.N_NEX_RXNS*self._maxbounds_kd_frac)
+            _rr  = np.random.randint( self.N_NEX_RXNS, size=(_nkd,))
+            
+            _ = [ self.__set_ubound(rxnid, +self._random_bound(0,100, 'linear')) for rxnid in self.NEX_RXNS[_rr] ]
+            _ = [ self.__set_lbound(rxnid, -self._random_bound(0,100, 'linear')) for rxnid in self.NEX_RXNS[_rr] ]
+            
+            if self._maxbounds_pfba:
+                bounded_sol = pfba(self.model)
+            else:
+                bounded_sol = self.model.optimize()
 
-    def compute_bounds(self, media_list, pfba=True, nprocessors=None, chunksize=1):      
+            
+            # Third, extract both flux vectors
+            _fluxes = np.zeros( ( self.N_NEX_RXNS,2) )
+            _fluxes[:,0] = [ unbounded_sol.fluxes[rxnid] for rxnid in self.NEX_RXNS ]
+            _fluxes[:,1] = [   bounded_sol.fluxes[rxnid] for rxnid in self.NEX_RXNS ]
+            _mu        = unbounded_sol.fluxes[self.BIOMASS_ID]
+            
+            if bounded_sol.status == 'optimal':
+                _maxbounds = [ self.__max_bound( F[0],F[1]) for F in _fluxes ]
+            else:
+                _maxbounds = [  unbounded_sol.fluxes[rxnid] for rxnid in self.NEX_RXNS ]
+            
+                
+            return medium, _mu, _maxbounds
+
+    
+      
+
+    def compute_bounds(self, media_list, kd_frac=0.10, pfba=True, nprocessors=None, chunksize=1):      
+        ''' compute_bounds( media_list, kd_frac=0.10, pfba=True, nprocessors=None, chunksize=1)
         
+        Computes the (p)fba solutions of the wild type and a mutant.
+        From both flux solutions, only the maximum/minimum are returned.
+        Computing the mutant helps to find the maxima of fluxes that are 
+        only active when other reactions are turned off.
+        
+        The mutant has a fraction kd_frac with random bounds taken
+        from a distribution U[0,100]. To modify these settings 
+        you need to modify _compute_bounds_parallel() in the file of the class.
+        '''
+            
         # Compute as many samples as media in media_list
         samples = len(media_list)
         
@@ -183,21 +225,22 @@ class QuantitativeMutation:
         self._maxbounds_pfba = pfba
         self._maxbounds_flx  = np.zeros( ( samples + 1 , self.N_NEX_RXNS ) )
         self._maxbounds_bio  = np.zeros( ( samples  , ) )
-        
+        self._maxbounds_kd_frac = kd_frac
+        self._maxbounds_media= []
         #... delete gene_reaction_rules as it makes Q non-parallelizable 
         self.GRR = {}
 
         
         with Pool( processes = nprocessors ) as pool:
                 it = pool.imap_unordered( self._compute_bounds_parallel , media_list, chunksize=chunksize )
+                icount = 0
                 
                 for results in tqdm( it, total=samples, leave=self.VERBOSE ):
-                    med = results[0]
-                    sol = results[1]
-                    idx = np.argwhere( np.array(media_list)==med)[0][0]
+                    self._maxbounds_media.append( results[0] )
+                    self._maxbounds_bio[ icount ]   = results[1]
+                    self._maxbounds_flx[ icount ,:] = results[2]
+                    icount += 1
                     
-                    self._maxbounds_flx[ idx,:] = [ sol.fluxes[rxn] for rxn in self.NEX_RXNS ]
-                    self._maxbounds_bio[ idx]   = sol.fluxes[self.BIOMASS_ID]
         
         
         #==== Define global bounds ====#
