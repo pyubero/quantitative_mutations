@@ -13,3 +13,6 @@ authors:
     email: pabloyub@cnb.csic.es
     affiliation: 'Centro Nacional de Biotecnología, CSIC'
     orcid: 'https://orcid.org/0000-0002-2860-2236'
+date-released: "2022"
+license: Apache-2.0
+repository-code: "https://github.com/pyubero/quantitative_mutations"
