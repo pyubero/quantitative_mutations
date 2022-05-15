@@ -12,15 +12,26 @@ from pathlib import Path
 
 
 class QuantitativeMutation:
-    def __init__(self, model, extra_genes = [], verbose = False):
+    def __init__(self, model, 
+                 biomass_id    = 'biomass', 
+                 system_rxn_id = 'ATPM',
+                 extra_genes   = [],
+                 verbose       = False):
         '''
         model - It can either be a path to a .json file containing the model, or
-                an instance of a cobra.core.model.Model class, or
-                a standard name to load the model from the internal ones (not working).
+                an instance of a cobra.core.model.Model class, or (not working)
+                a standard name to load the model from the internal ones.
                 
-        extra_genes - Some models don't have in model.genes all the gene names that 
-                      appear in the gene reaction rules. e.g. s0001 in ecoli_core. If this is
-                      the case, an error will pop up when calling apply_dosage().
+        biomass_id    - In some models the biomass reaction is named differently. For example,
+                        in yeast8 the biomass reaction is r_2111 and it is called "growth". In 
+                        that case specify biomass_id = 'r_2111'.
+                        
+        system_rxn_id - List of reaction ids that will be ignored in all bound-related computations.
+                        For example, the ATP maintenance rate reaction.
+   
+        extra_genes   - Some models don't have in model.genes all the gene names that 
+                        appear in the gene reaction rules. e.g. s0001 in ecoli_core. If this is
+                        the case, an error will pop up when calling apply_dosage().
                       
         verbose - Prints out whatever is hampening. Useful for quick debugging.    
         '''
@@ -34,29 +45,34 @@ class QuantitativeMutation:
             self.MODEL_NAME = model.id
             if self.VERBOSE: print('Loaded model %s from user input.' % self.MODEL_NAME)
                 
-        elif Path( './models/%s.json' % model ).exists():
-            self.model      = cobra.io.load_json_model('./models/%s.json' % model )
-            self.MODEL_NAME = model
-            if self.VERBOSE: print('Loaded model %s from internal files.' % self.MODEL_NAME)
-            
-        else:
+        elif type(model) == str:
             self.model = cobra.io.load_json_model( model )
             self.MODEL_NAME = self.model.id
             if self.VERBOSE: print('Loaded model %s from user file.' % self.MODEL_NAME)
         
         
         ####### Reactions #######
-        # Store separately exchange, system and non-exchange reactions,as these are lists, the order is kept *constant*        
-        self.EX_RXNS  =  np.array( [ rxn.id for rxn in self.model.reactions if rxn.id[:3]=='EX_' ] )
-        self.SYS_RXNS =  np.array( [ rxn.id for rxn in self.model.reactions if rxn.id[:4]=='BIOM' or rxn.id=='ATPM'] )
-        self.NEX_RXNS =  np.array( [ rxn.id for rxn in self.model.reactions 
-                                       if not rxn.id[:3]=='EX_' and not rxn.id[:4]=='BIOM' and not rxn.id=='ATPM'] )
+        # Store separately the biomass reaction
+        self.BIOMASS_ID = [rxn.id for rxn in self.model.reactions if biomass_id in rxn.id.lower() ][0]
+        if self.VERBOSE: print('Biomass reaction id is %s' % self.BIOMASS_ID)
         
-        # Also store there indices for quick array access
-        self.EX_RXNS_IDX  =  np.array( [ idx for idx, rxn in enumerate(self.model.reactions) if rxn.id[:3]=='EX_' ] )
-        self.SYS_RXNS_IDX =  np.array( [ idx for idx, rxn in enumerate(self.model.reactions) if rxn.id[:4]=='BIOM' or rxn.id=='ATPM'])
-        self.NEX_RXNS_IDX =  np.array( [ idx for idx, rxn in enumerate(self.model.reactions) 
-                                       if not rxn.id[:3]=='EX_' and not rxn.id[:4]=='BIOM' and not rxn.id=='ATPM'] )
+        
+        # Store the exchange reactions as either having a tag, or as a user-defined list of reactions
+        self.EX_RXNS = np.array( [ rxn.id for rxn in self.model.exchanges] )
+
+        
+        # Store the system reactions as either having a tag, or as a user-defined list of reactions
+        if type(system_rxn_id) == str:
+            self.SYS_RXNS  =  np.array( [ rxn.id for rxn in self.model.reactions if system_rxn_id in rxn.id ] )
+           
+        elif type(system_rxn_id)== list:
+            self.SYS_RXNS  =  np.array( system_rxn_id )
+      
+        
+        # Store non exchange reactions as all that are neither biomass, exchange nor system-rxns
+        ignore_rxns = np.hstack( (self.BIOMASS_ID, self.EX_RXNS, self.SYS_RXNS))
+        self.NEX_RXNS = np.array( [ rxn.id for rxn in self.model.reactions if rxn.id not in ignore_rxns] )
+        
         
         # Store their numbers, this is useful for array shaping
         self.N_FLUXES = len(self.model.reactions)
@@ -71,16 +87,6 @@ class QuantitativeMutation:
             self.upper_bounds.update({rxn_id: self.model.reactions.get_by_id(rxn_id).upper_bound })
             self.lower_bounds.update({rxn_id: self.model.reactions.get_by_id(rxn_id).lower_bound })
                 
-        # Store separately the biomass reaction
-        self.BIOMASS_ID = [rxn.id for rxn in self.model.reactions if 'biomass' in rxn.id.lower() ][0]
-        if self.VERBOSE: print('Biomass reaction id is %s' % self.BIOMASS_ID)
-    
-        # Try to translate all gene reaction rules 
-        #... as it contains lambda functions, this variable needs to be deleted before every parallelization.
-        self.GRR = {}
-        self.translate_all_gene_reaction_rules()
-
-            
         
         ######## Genotype ########
         # Store gene ids that are present in model.genes but also...
@@ -99,7 +105,14 @@ class QuantitativeMutation:
         self.UPPER_CLIP  = 999
         self.LOWER_CLIP  = 0.1        
                
-       
+            
+        ######## Gene reaction rules ########
+        # Try to translate all gene reaction rules 
+        #... as it contains lambda functions, this variable needs to be deleted before every parallelization.
+        self.GRR = {}
+        self.translate_all_gene_reaction_rules()
+
+        
     
         if self.VERBOSE: print('The model has %d genes and %d reactions.' %(self.N_GENES, self.N_FLUXES) )
         if self.VERBOSE: print('... number of exchange reactions:\t%d' % self.N_EX_RXNS )
@@ -143,7 +156,7 @@ class QuantitativeMutation:
         return
         
 
-    def load_bounds(self, filename):
+    def old_load_bounds(self, filename):
         with open(filename,'r') as f:
             for _ in range(self.N_NEX_RXNS):
                 data = f.readline().split('\n')[0].split(';')
@@ -153,6 +166,33 @@ class QuantitativeMutation:
             extra_data = f.readline()
         print('Maxbounds loaded from %s on %s.' % (filename, datetime.now() ) )
         return extra_data
+    
+    
+    
+    def load_bounds(self, filename):
+        with open(filename,'r') as f:
+             while True:
+                    
+                # Read next line of the csv file
+                data = f.readline().split('\n')[0].split(';')
+                
+                #... if line is empty break loop
+                if data[0]=='':                break
+                
+                #... if data[0] is recognized as a reaction ID, set bounds
+                if data[0] in self.NEX_RXNS:
+                    self.upper_bounds[data[0]] = float( data[1] )
+                    self.lower_bounds[data[0]] = float( data[2] )
+                    
+                elif data[0] == 'Description':
+                    self.bounds_description = ';'.join( data ) 
+                else:
+                    print('<W> Could not load bound for %s' % data[0])
+                
+        if self.VERBOSE:   print('Maxbounds loaded from %s on %s.' % (filename, datetime.now() ) )
+    
+    
+    
     
     def reset_bounds(self):
         _ = [ self.__set_ubound(rxnid, +999) for rxnid in self.NEX_RXNS ]
@@ -509,11 +549,11 @@ class QuantitativeMutation:
             #mu_wt = self.model.optimize().fluxes[self.BIOMASS_ID]
             mu_wt = self.slim_optimize()
             #... if infeasible, abort
-            if mu_wt is None or np.isnan(mu_wt):
+            if mu_wt is None or np.isnan(mu_wt) or mu_wt==0:
                 return None
             
             
-            # Set random genotype
+            # Set specific genotype
             gen = self.set_genotype( genotype )
             self.apply_dosage()            
             
@@ -652,7 +692,7 @@ class QuantitativeMutation:
     ######################### ------------------------------ #########################
     ##################################################################################
     def set_dosage(self, gene_id, relative_dosage=1):
-        self.gene_dosage[gene_id] = np.clip( relative_dosage, 1e-8, 1e3)
+        self.gene_dosage[gene_id] = np.clip( relative_dosage, 1e-99, 1e3)
         return relative_dosage
     
     def reset_dosage(self):
