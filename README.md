@@ -1,3 +1,5 @@
+![GitHub](https://img.shields.io/github/license/pyubero/quantitative_mutations)
+
 # Quantitative mutations using `qmut`
 The package qmut contains mainly a class called QuantitativeMutation to enable the simulation of quantitative mutations of whole genome metabolic reconstructions. 
 
