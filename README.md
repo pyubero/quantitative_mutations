@@ -19,3 +19,13 @@ In this tutorial we will show the main applications and methods of the Quantiati
 5. Check how gene reaction rules are quantitatively interpreted.
 6. Working with relative gene dosages and quantitative mutations.
 7. Compute individuals, and populations in a single or in multiple processors.
+
+
+## Reference
+If you find this class useful and you use it in your work, please *also* cite its paper:
+The limitations of phenotype prediction in metabolism, Pablo Yubero, Alvar A. Lavin, Juan F. Poyatos
+bioRxiv 2022.05.19.492732; doi: https://doi.org/10.1101/2022.05.19.492732
+
+## Contact
+If your have any issue with this repo please contact me through github rather than email. 
+Feel free to ask for updated versions of it as perhaps I miss to keep this repo up to date.
