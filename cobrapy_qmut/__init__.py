@@ -1,1 +1,1 @@
-from .QuantitativeMutation import *
+from .QuantitativeMutation import QuantitativeMutation
