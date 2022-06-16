@@ -5,7 +5,8 @@ The package qmut contains mainly a class called QuantitativeMutation to enable t
 
 ## Installation
  1. Check that you have `cobrapy` installed in your environment
- 2. Download and copy the `\cobrapy_qmut` folder in your working directory.
+ 2. Download and copy the `\cobrapy_qmut` folder in your working directory, or
+ 2. Download and run  `pip install path_to_setup.py_parent_folder` 
 
 
 ## Tutorial
